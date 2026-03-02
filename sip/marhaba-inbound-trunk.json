@@ -1,0 +1,7 @@
+{
+  "trunk": {
+    "name": "marhaba-haji-inbound",
+    "numbers": ["+917969288564"],
+    "allowed_addresses": ["103.20.104.213/32"]
+  }
+}

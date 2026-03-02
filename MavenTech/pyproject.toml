@@ -1,0 +1,22 @@
+[project]
+name = "maventech-agent"
+version = "0.1.0"
+description = "MavenTech Voice AI Agent - Bus & Cargo Booking with Sarvam STT + Cartesia TTS"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    # LiveKit core + plugins (Sarvam STT, Cartesia TTS, Google LLM, Silero VAD)
+    "livekit-agents[silero,turn-detector,google,cartesia,sarvam,openai]>=1.4",
+    # Config
+    "python-dotenv",
+    # HTTP clients
+    "httpx",
+    "aiohttp",
+    "requests",
+    # MongoDB
+    "motor",
+    "tenacity",
+    # Logging
+    "loguru",
+    # Fuzzy city name matching
+    "rapidfuzz",
+]

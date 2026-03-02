@@ -1,0 +1,19 @@
+[project]
+name = "marhaba-haji-agent"
+version = "0.1.0"
+description = "Marhaba Haji Voice AI Agent - Hajj, Umrah & Halal Holiday Travel with Sarvam STT + Cartesia TTS"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    # LiveKit core + plugins (Sarvam STT, Cartesia TTS, Google LLM, Silero VAD)
+    "livekit-agents[silero,turn-detector,google,cartesia,sarvam,openai]>=1.4",
+    # Config
+    "python-dotenv",
+    # HTTP clients
+    "httpx",
+    "aiohttp",
+    # MongoDB
+    "motor",
+    "tenacity",
+    # Logging
+    "loguru",
+]

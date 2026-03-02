@@ -1,0 +1,31 @@
+# LiveKit Server Configuration
+# Docs: https://docs.livekit.io/home/self-hosting/deployment
+
+port: 7880
+log_level: info
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  # use_external_ip: true for cloud environments where the host has a
+  # public IP but it's not directly bound to the network interface.
+  # LiveKit uses STUN to discover the real public IP.
+  use_external_ip: true
+
+redis:
+  address: 127.0.0.1:6379
+
+# API key/secret pairs
+# IMPORTANT: Replace the line below with your actual key and secret.
+# Format:  YourAPIKey: YourAPISecret  (no quotes, no #)
+keys:
+  REPLACE_API_KEY: REPLACE_API_SECRET
+
+# TURN server for clients behind restrictive firewalls
+turn:
+  enabled: true
+  # Must match the domain pointed to this server's IP
+  domain: REPLACE_WITH_YOUR_DOMAIN
+  tls_port: 5349
+  udp_port: 443

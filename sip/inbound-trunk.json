@@ -1,0 +1,12 @@
+docker compose logs -f livekit-sip truliv-agent{
+  "trunk": {
+    "name": "truliv-inbound",
+    "numbers": ["+917969288563"],
+    "allowed_addresses": ["103.20.104.213/32"]
+  }
+}
+
+
+scp -i ~/Downloads/lohith.pem /Users/lohith/Desktop/LiveKit/agent/main.py ubuntu@13.232.158.181:~/LiveKit/agent/main.py
+scp -i ~/Downloads/lohith.pem /Users/lohith/Desktop/LiveKit/agent/assistant.py ubuntu@13.232.158.181:~/LiveKit/agent/assistant.py
+scp -i ~/Downloads/lohith.pem /Users/lohith/Desktop/LiveKit/agent/instruction.py ubuntu@13.232.158.181:~/LiveKit/agent/instruction.py

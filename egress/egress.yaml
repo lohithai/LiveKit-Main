@@ -1,0 +1,16 @@
+# LiveKit Egress Configuration
+# Docs: https://docs.livekit.io/home/egress/overview
+
+api_key: API3d6db8e92c29
+api_secret: hCOBAIiJ2XeIVxFXY8B59OmnaCxIOpXe
+ws_url: ws://127.0.0.1:7880
+
+# Redis must match the LiveKit server config
+redis:
+  address: 127.0.0.1:6379
+
+# Health check port
+health_port: 9090
+
+# Logging
+log_level: info

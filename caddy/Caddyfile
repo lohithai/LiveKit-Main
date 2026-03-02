@@ -1,0 +1,14 @@
+# Caddy reverse proxy for LiveKit + Dashboards
+# Caddy automatically provisions Let's Encrypt TLS certificates.
+
+livekit.supercx.co {
+    reverse_proxy 127.0.0.1:7880
+}
+
+truliv.supercx.co {
+    reverse_proxy 127.0.0.1:3000
+}
+
+maventech.supercx.co {
+    reverse_proxy 127.0.0.1:3000
+}

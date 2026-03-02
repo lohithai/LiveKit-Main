@@ -1,0 +1,12 @@
+api_key: API3d6db8e92c29
+api_secret: hCOBAIiJ2XeIVxFXY8B59OmnaCxIOpXe
+ws_url: ws://127.0.0.1:7880
+
+redis:
+  address: 127.0.0.1:6379
+
+sip:
+  port: 5060
+
+logging:
+  level: info

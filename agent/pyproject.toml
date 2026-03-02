@@ -1,0 +1,29 @@
+[project]
+name = "truliv-agent"
+version = "0.2.0"
+description = "Truliv Voice AI Agent - Self-Hosted LiveKit with Sarvam STT + Cartesia TTS"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    # LiveKit core + plugins (Sarvam STT, Cartesia TTS, Google LLM, Silero VAD)
+    "livekit-agents[silero,turn-detector,google,cartesia,sarvam,openai]>=1.4",
+    "livekit-api>=1.0",
+    "livekit-plugins-noise-cancellation~=0.2",
+    # Config
+    "python-dotenv",
+    # HTTP clients
+    "httpx",
+    "aiohttp",
+    "requests",
+    # MongoDB
+    "motor",
+    "tenacity",
+    # Google Sheets
+    "gspread",
+    "pandas",
+    "google-auth",
+    # LeadSquared / LLM for zero-deposit tool
+    "langchain-core",
+    "langchain-google-genai",
+    # Logging
+    "loguru",
+]

@@ -1,0 +1,15 @@
+{
+  "rule": {
+    "dispatchRuleIndividual": {
+      "roomPrefix": "marhaba-call-"
+    },
+    "trunkIds": [],
+    "roomConfig": {
+      "agents": [
+        {
+          "agentName": "marhaba-haji"
+        }
+      ]
+    }
+  }
+}

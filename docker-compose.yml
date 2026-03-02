@@ -1,0 +1,145 @@
+services:
+  # ── Redis (signaling store for LiveKit) ──────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - redis-data:/data
+
+  # ── LiveKit Server (SFU media server) ────────────────────────────
+  # Uses host networking to avoid the 10,000 iptables rules problem
+  # with UDP port range 50000-60000
+  livekit-server:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit.yaml
+    command: ["--config", "/etc/livekit.yaml"]
+    depends_on:
+      - redis
+
+  # ── LiveKit Egress (call recording) ──────────────────────────────
+  livekit-egress:
+    image: livekit/egress:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - EGRESS_CONFIG_FILE=/etc/egress.yaml
+    volumes:
+      - ./egress/egress.yaml:/etc/egress.yaml
+    depends_on:
+      - livekit-server
+      - redis
+
+  # ── LiveKit SIP Server (telephony bridge) ────────────────────────
+  livekit-sip:
+    image: livekit/sip:latest
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./sip/config.yaml:/sip/config.yaml
+    environment:
+      - LIVEKIT_URL=ws://127.0.0.1:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+    depends_on:
+      - livekit-server
+
+  # ── Caddy (reverse proxy + auto TLS) ─────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - livekit-server
+
+  # ── Truliv Voice AI Agent ────────────────────────────────────────
+  truliv-agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./agent/.env.local
+    environment:
+      - LIVEKIT_URL=ws://127.0.0.1:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+    depends_on:
+      - livekit-server
+      - redis
+
+  # ── MavenTech Bus Booking Voice AI Agent ───────────────────────
+  maventech-agent:
+    build:
+      context: ./MavenTech
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./MavenTech/.env.local
+    environment:
+      - LIVEKIT_URL=ws://127.0.0.1:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+    depends_on:
+      - livekit-server
+      - redis
+
+  # ── Krsnaa Diagnostics Voice AI Agent ──────────────────────────
+  krsnaa-agent:
+    build:
+      context: ./KrsnaaDiagnostics
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./KrsnaaDiagnostics/.env.local
+    environment:
+      - LIVEKIT_URL=ws://127.0.0.1:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+    depends_on:
+      - livekit-server
+      - redis
+
+  # ── Marhaba Haji Voice AI Agent (Hajj/Umrah Travel) ─────────────
+  marhaba-haji-agent:
+    build:
+      context: ./MarhabaHaji
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./MarhabaHaji/.env.local
+    environment:
+      - LIVEKIT_URL=ws://127.0.0.1:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+    depends_on:
+      - livekit-server
+      - redis
+
+  # ── SuperCX Dashboard (Next.js) ──────────────────────────────────
+  supercx-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./dashboard/.env.local
+    depends_on:
+      - livekit-server
+
+volumes:
+  redis-data:
+  caddy-data:
+  caddy-config:
