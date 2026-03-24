@@ -1,3 +1,8 @@
+"""
+Truliv Luna Bengaluru — Voice Agent Entry Point
+Sarvam STT + Sarvam TTS + OpenRouter LLM (Gemini 2.5 Flash)
+"""
+
 import json
 import os
 import asyncio
@@ -6,19 +11,18 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from livekit import agents, rtc
-from livekit.agents import AgentServer, AgentSession, AutoSubscribe, room_io
-from livekit.plugins import cartesia, google, noise_cancellation, openai, sarvam, silero
-from google.genai import types as genai_types
+from livekit.agents import AgentServer, AgentSession, AutoSubscribe
+from livekit.plugins import google, openai, sarvam, silero
 
 import agent_tools
 from agent_tools import (
     load_properties_once,
-    get_properties_data_from_sheet,
     set_cached_context,
     flush_cached_context,
     clear_cached_context,
     get_cached_context,
 )
+from mongo_data import preload_all_data, get_property_names as get_warden_property_names
 from assistant import TrulivAssistant
 from call_recorder import start_recording, stop_recording, get_recording_url
 from database import get_async_context_collection, get_async_call_logs_collection
@@ -29,48 +33,10 @@ from webhook_sender import build_webhook_payload, send_webhook
 load_dotenv(".env.local")
 
 AGENT_NAME = os.getenv("AGENT_NAME", "truliv-telephony-agent")
-CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID", "")
+SARVAM_VOICE_ID = os.getenv("SARVAM_VOICE_ID", "shreya")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 server = AgentServer()
-
-
-# ── LLM Health Check & Fallback ────────────────────────────────────
-
-
-async def _check_gemini_health() -> bool:
-    """Quick probe to check if Gemini API is responsive (not rate-limited)."""
-    import google.genai as genai
-
-    try:
-        client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-        response = await asyncio.wait_for(
-            client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents="Say OK",
-                config=genai_types.GenerateContentConfig(
-                    max_output_tokens=5,
-                    thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
-                ),
-            ),
-            timeout=2.0,
-        )
-        return bool(response and response.text)
-    except Exception as e:
-        logger.warning(f"Gemini health check failed: {e}")
-        return False
-
-
-def _create_llm(use_gemini: bool):
-    """Create the appropriate LLM instance based on health check."""
-    if use_gemini:
-        logger.info("Using Gemini 2.5 Flash as LLM")
-        return google.LLM(
-            model="gemini-2.5-flash",
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
-        )
-    else:
-        logger.info("Using OpenAI GPT-4o as fallback LLM")
-        return openai.LLM(model="gpt-4o")
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -94,13 +60,15 @@ def _normalize_user_id(phone: str) -> str:
     return clean
 
 
-def _build_greeting_instructions(user_contexts: dict) -> str:
-    """Build dynamic greeting instructions based on returning customer context."""
+def _build_greeting(user_contexts: dict):
+    """Build greeting — returns (text, use_llm).
+    For new callers: returns static text (skip LLM, go straight to TTS).
+    For returning callers: returns LLM instruction (needs personalization).
+    """
     from datetime import date as date_type
 
     name = user_contexts.get("name", "")
     is_returning = name and name not in ["Voice User", "User", "Unknown", ""]
-    bot_location = user_contexts.get("botLocationPreference", "")
     bot_sv_date = user_contexts.get("botSvDate", "")
 
     if is_returning and name:
@@ -112,33 +80,30 @@ def _build_greeting_instructions(user_contexts: dict) -> str:
 
                 if visit_date < today:
                     return (
-                        f"Greet the caller by name '{first_name}'. "
-                        f"They had a visit scheduled on {bot_sv_date}. "
-                        f"Ask how the visit went and if they liked the property."
+                        f"Hey {first_name}! So nice to hear from you again. "
+                        f"How did your visit go? Did you like the place?",
+                        False,
                     )
                 else:
                     return (
-                        f"Greet the caller by name '{first_name}'. "
-                        f"They have an upcoming visit on {bot_sv_date}. "
-                        f"Ask if they have any questions before the visit, or if they need to reschedule."
+                        f"Hey {first_name}! Great to hear from you. "
+                        f"You have a visit coming up on {bot_sv_date}. "
+                        f"Do you have any questions before your visit?",
+                        False,
                     )
             except (ValueError, TypeError):
                 pass
 
-        if bot_location:
-            return (
-                f"Greet the caller by name '{first_name}'. "
-                f"They were interested in properties near {bot_location}. "
-                f"Ask how you can help them today."
-            )
         return (
-            f"Greet the returning caller by name '{first_name}'. "
-            f"Ask how you can help them today."
+            f"Hey {first_name}! So nice to hear from you again. How can I help you today?",
+            False,
         )
 
+    # New caller — static greeting, skip LLM for zero latency
     return (
-        "Greet the caller warmly in English. Introduce yourself as Priya from Truliv Coliving. "
-        "Ask if they are looking for a PG in Chennai. Speak in English."
+        "Hi there! I'm Priya from Truliv Coliving. "
+        "Are you looking for a comfortable co living space in Bengaluru?",
+        False,
     )
 
 
@@ -155,15 +120,13 @@ def _parse_qc_response(raw: str) -> dict:
 
 
 async def _run_qc_analysis(call_log_id, transcript: list, call_logs_coll):
-    """Run QC analysis on a call transcript. Tries Gemini first, falls back to OpenAI."""
-    import google.genai as genai
-    from openai import AsyncOpenAI
+    """Run QC analysis on a call transcript using OpenRouter."""
 
     transcript_text = "\n".join(
         f"{msg['role'].upper()}: {msg['text']}" for msg in transcript
     )
 
-    qc_prompt = f"""Evaluate this voice AI call transcript. Score each category 0-100 with a brief note (max 15 words per note).
+    qc_prompt = f"""Evaluate this voice AI call transcript for Truliv Luna Bengaluru. Score each category 0-100 with a brief note (max 15 words per note).
 
 TRANSCRIPT:
 {transcript_text}
@@ -182,8 +145,9 @@ Return ONLY valid JSON (no markdown, no code fences):
 
     raw = None
 
-    # Try Gemini first
+    # Use direct Gemini for QC
     try:
+        import google.genai as genai
         client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
         response = await client.aio.models.generate_content(
             model="gemini-2.5-flash",
@@ -192,22 +156,8 @@ Return ONLY valid JSON (no markdown, no code fences):
         raw = response.text.strip()
         logger.info(f"QC analysis via Gemini for call {call_log_id}")
     except Exception as e:
-        logger.warning(f"QC Gemini failed, falling back to OpenAI: {e}")
-
-    # Fallback to OpenAI if Gemini failed
-    if raw is None:
-        try:
-            oai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            oai_response = await oai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": qc_prompt}],
-                temperature=0.3,
-            )
-            raw = oai_response.choices[0].message.content.strip()
-            logger.info(f"QC analysis via OpenAI fallback for call {call_log_id}")
-        except Exception as e:
-            logger.error(f"QC OpenAI fallback also failed: {e}")
-            return
+        logger.error(f"QC analysis failed: {e}")
+        return
 
     try:
         qc_result = _parse_qc_response(raw)
@@ -229,7 +179,7 @@ Return ONLY valid JSON (no markdown, no code fences):
 
 @server.rtc_session(agent_name=AGENT_NAME)
 async def truliv_agent(ctx: agents.JobContext):
-    """Truliv voice agent — handles inbound SIP calls."""
+    """Truliv Luna Bengaluru voice agent — handles inbound SIP calls."""
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
@@ -259,22 +209,24 @@ async def truliv_agent(ctx: agents.JobContext):
             logger.error(f"MongoDB context load failed: {e}")
             return {"phoneNumber": phone_number or "", "name": "Voice User"}
 
-    async def _load_properties():
+    async def _load_property_data():
+        """Fetch Truliv Luna data from Warden API with 2s timeout."""
         try:
-            await asyncio.gather(load_properties_once(), get_properties_data_from_sheet())
-            if agent_tools.properties_data_cache:
-                names = [p.get("name", "") for p in agent_tools.properties_data_cache if p.get("name")]
-                logger.info(f"Loaded {len(names)} property names")
-                return names
+            await asyncio.wait_for(preload_all_data(), timeout=2.0)
+            names = get_warden_property_names()
+            logger.info(f"Pre-loaded Truliv Luna property data from Warden API")
+            return names
+        except asyncio.TimeoutError:
+            logger.warning("Warden API timed out (2s) — using defaults")
+            return ["Truliv Luna"]
         except Exception as e:
-            logger.error(f"Failed to load properties: {e}")
-        return []
+            logger.error(f"Failed to load Warden property data: {e}")
+            return ["Truliv Luna"]
 
-    # Run MongoDB, properties, and Gemini health check all at once
-    user_contexts, properties_name, gemini_ok = await asyncio.gather(
+    # Run MongoDB context + Warden API data fetch in parallel
+    user_contexts, properties_name = await asyncio.gather(
         _load_user_context(),
-        _load_properties(),
-        _check_gemini_health(),
+        _load_property_data(),
     )
 
     set_cached_context(voice_user_id, user_contexts)
@@ -287,14 +239,15 @@ async def truliv_agent(ctx: agents.JobContext):
         properties_name=properties_name,
     )
 
-    stt_hints = ["Truliv", "Truliv Coliving", "PG", "coliving", "Chennai"]
-    stt_hints.extend(properties_name)
+    # ── STT: Sarvam saaras:v3 ─────────────────────────────────────
+    stt_hints = ["Truliv", "Truliv Luna", "Truliv Coliving", "PG", "co living", "Bengaluru", "Bangalore"]
     stt_hints.extend([
-        "OMR", "Kodambakkam", "T Nagar", "Velachery", "Adyar", "Thoraipakkam",
-        "Sholinganallur", "Perungudi", "Guindy", "Anna Nagar", "Porur", "Ambattur",
-        "Chromepet", "Tambaram", "Medavakkam", "Pallavaram", "Siruseri", "Navalur",
+        "Koramangala", "HSR Layout", "Electronic City", "Whitefield", "Indiranagar",
+        "Marathahalli", "Bellandur", "Sarjapur", "JP Nagar", "Jayanagar",
+        "BTM Layout", "Banashankari", "Rajajinagar", "Hebbal", "Yelahanka",
+        "Silk Board", "Majestic", "MG Road", "Brigade Road", "Bannerghatta",
     ])
-    stt_prompt = "Truliv Coliving property search. Keywords: " + ", ".join(stt_hints)
+    stt_prompt = "Truliv Luna Bengaluru PG property. Keywords: " + ", ".join(stt_hints)
 
     stt = sarvam.STT(
         model="saaras:v3",
@@ -306,28 +259,39 @@ async def truliv_agent(ctx: agents.JobContext):
         sample_rate=16000,
     )
 
-    tts = cartesia.TTS(
-        model="sonic-3",
-        voice=CARTESIA_VOICE_ID,
-        language="en",
-        speed=0.9,
-        emotion=["Calm", "Affectionate"],
+    # ── TTS: Sarvam (ultra-low-latency config) ───────────────────
+    tts = sarvam.TTS(
+        speaker=SARVAM_VOICE_ID,
+        target_language_code="en-IN",
+        model="bulbul:v3",
+        loudness=1.5,
+        pace=1.1,
+        speech_sample_rate=22050,
+        enable_preprocessing=False,
+        min_buffer_size=8,
+        max_chunk_length=40,
     )
 
+    # ── VAD: Silero (aggressive — snap to speech quickly) ─────────
     vad = silero.VAD.load(
-        min_speech_duration=0.25,
-        min_silence_duration=0.4,
-        prefix_padding_duration=0.3,
-        activation_threshold=0.55,
+        min_speech_duration=0.1,
+        min_silence_duration=0.25,
+        prefix_padding_duration=0.15,
+        activation_threshold=0.35,
         sample_rate=16000,
     )
 
-    llm = _create_llm(use_gemini=gemini_ok)
+    # ── LLM: Gemini 2.0 Flash (fastest for voice) ────────────────
+    llm = google.LLM(
+        model="gemini-2.0-flash",
+        temperature=0.6,
+    )
+    logger.info("Using Gemini 2.0 Flash (direct) as LLM")
 
     session = AgentSession(
         stt=stt, llm=llm, tts=tts, vad=vad,
-        min_endpointing_delay=0.5,
-        max_endpointing_delay=0.8,
+        min_endpointing_delay=0.2,
+        max_endpointing_delay=0.5,
         preemptive_generation=True,
     )
 
@@ -435,7 +399,6 @@ async def truliv_agent(ctx: agents.JobContext):
             # ── Send external webhook ──────────────────────────────
             if call_log_id and transcript:
                 try:
-                    # Fetch QC scores if available
                     qc_scores = None
                     try:
                         call_logs_coll = await get_async_call_logs_collection()
@@ -508,16 +471,14 @@ async def truliv_agent(ctx: agents.JobContext):
     await session.start(
         room=ctx.room,
         agent=assistant,
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                noise_cancellation=noise_cancellation.BVC(),
-            ),
-        ),
     )
 
-    # ── Greeting ───────────────────────────────────────────────────
-    greeting = _build_greeting_instructions(user_contexts)
-    await session.generate_reply(instructions=greeting)
+    # ── Greeting (direct TTS — no LLM round-trip for instant response) ──
+    greeting_text, use_llm = _build_greeting(user_contexts)
+    if use_llm:
+        await session.generate_reply(instructions=greeting_text)
+    else:
+        await session.say(greeting_text)
 
     # ── Auto-disconnect on prolonged silence (safety net) ──────────
     async def _silence_watchdog():
