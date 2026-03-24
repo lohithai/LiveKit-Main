@@ -268,8 +268,8 @@ async def truliv_agent(ctx: agents.JobContext):
         pace=1.1,
         speech_sample_rate=22050,
         enable_preprocessing=False,
-        min_buffer_size=8,
-        max_chunk_length=40,
+        min_buffer_size=30,
+        max_chunk_length=50,
     )
 
     # ── VAD: Silero (aggressive — snap to speech quickly) ─────────
