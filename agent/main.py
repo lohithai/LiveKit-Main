@@ -417,7 +417,7 @@ async def truliv_agent(ctx: agents.JobContext):
         speech_sample_rate=22050,
         enable_preprocessing=False,
         min_buffer_size=30,
-        max_chunk_length=40,
+        max_chunk_length=50,
     )
 
     vad = silero.VAD.load(
