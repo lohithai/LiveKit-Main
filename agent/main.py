@@ -71,27 +71,23 @@ def _build_greeting(user_contexts: dict) -> tuple[str, bool]:
                 today = date_type.today()
                 if visit_date < today:
                     return (
-                        f"Hey {first_name}! So nice to hear from you again. "
-                        f"How did your visit go? Did you like the place?",
+                        f"Hey {first_name}! How did your visit go?",
                         False,
                     )
                 else:
                     return (
-                        f"Hey {first_name}! Great to hear from you. "
-                        f"You have a visit coming up on {bot_sv_date}. "
-                        f"Do you have any questions before your visit?",
+                        f"Hey {first_name}! Your visit is on {bot_sv_date}. Any questions?",
                         False,
                     )
             except (ValueError, TypeError):
                 pass
         return (
-            f"Hey {first_name}! So nice to hear from you again. How can I help you today?",
+            f"Hey {first_name}! How can I help you today?",
             False,
         )
 
     return (
-        "Hi there! I'm Priya from Truliv Coliving. "
-        "Are you looking for a comfortable co living space in Bengaluru?",
+        "Hi! I'm Priya from Truliv. Are you looking for a PG in Bengaluru?",
         False,
     )
 
@@ -413,7 +409,7 @@ async def truliv_agent(ctx: agents.JobContext):
         target_language_code="en-IN",
         model="bulbul:v3",
         loudness=1.5,
-        pace=1.1,
+        pace=1.15,
         speech_sample_rate=22050,
         enable_preprocessing=False,
         min_buffer_size=30,
@@ -422,24 +418,24 @@ async def truliv_agent(ctx: agents.JobContext):
 
     vad = silero.VAD.load(
         min_speech_duration=0.1,
-        min_silence_duration=0.2,
+        min_silence_duration=0.25,
         prefix_padding_duration=0.1,
-        activation_threshold=0.35,
+        activation_threshold=0.4,
         sample_rate=16000,
     )
 
-    llm = google.LLM(model="gemini-2.5-flash", temperature=0.7)
+    llm = google.LLM(model="gemini-2.0-flash", temperature=0.7)
 
     turn_handling = TurnHandlingOptions(
         endpointing={
             "mode": "dynamic",
-            "min_delay": 0.05,
-            "max_delay": 0.2,
+            "min_delay": 0.1,
+            "max_delay": 0.35,
         },
         interruption={
             "enabled": True,
-            "mode": "adaptive",
-            "min_duration": 0.4,
+            "mode": "vad",
+            "min_duration": 0.5,
             "min_words": 2,
         },
     )
@@ -484,7 +480,7 @@ async def truliv_agent(ctx: agents.JobContext):
     await session.start(room=ctx.room, agent=assistant)
 
     # Delay so SIP audio channel is fully ready before first word
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(0.5)
     greeting_text, use_llm = _build_greeting(user_contexts)
     if use_llm:
         await session.generate_reply(instructions=greeting_text)
