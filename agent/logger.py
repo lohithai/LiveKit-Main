@@ -35,6 +35,3 @@ logger.add(
     backtrace=True,
     diagnose=True
 )
-
-# Voice logger - same as main logger (console only)
-voice_logger = logger

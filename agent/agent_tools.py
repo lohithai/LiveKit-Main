@@ -7,20 +7,16 @@ import os
 import json
 import asyncio
 import re
-import time
 from typing import Dict, List, Optional
 from math import radians, sin, cos, sqrt, atan2
 from datetime import datetime
-import traceback
 
 import aiohttp
-import requests
 from dotenv import load_dotenv
 
 from logger import logger
 from database import get_async_context_collection
 from lead_sync import sync_user_to_leadsquared
-from task_queue import bg_tasks
 from mongo_data import (
     preload_all_data,
     get_property,
@@ -275,7 +271,7 @@ async def schedule_site_visit(
         display_time = parsed_time.strftime("%I:%M %p").lstrip("0")
 
         logger.info(f"[TOOL-END] schedule_site_visit | User: {user_phone} | Visit: {visit_date} at {formatted_time}")
-        return f"Your visit to Truliv Luna is confirmed for {display_date} at {display_time}. Our team will be there to welcome you and show you around the property."
+        return f"Your visit is confirmed for {display_date} at {display_time}. Our team will be there to welcome you and show you around the property."
 
     except Exception as e:
         logger.error(f"[TOOL-ERROR] schedule_site_visit failed | Error: {str(e)}", exc_info=True)
@@ -300,28 +296,40 @@ async def query_luna_property_info(user_id: str, query: str) -> str:
         query_lower = query.lower()
 
         if "address" in query_lower or "location" in query_lower or "where" in query_lower:
-            return f"{name} is located in {address}. It's really well connected and easy to reach."
+            # Clean up address: remove duplicate city/state mentions
+            clean_address = address
+            # Remove duplicate "Bengaluru" or "Karnataka" if they appear more than once
+            import re as _re
+            # Deduplicate "Bengaluru" and "Karnataka" in address
+            for word in ["Bengaluru", "Bangalore", "Karnataka"]:
+                parts = clean_address.split(word)
+                if len(parts) > 2:
+                    # Keep only the last occurrence
+                    clean_address = word.join(parts[:-1]) + word + parts[-1]
+            # Remove trailing comma/space artifacts
+            clean_address = _re.sub(r',\s*,', ',', clean_address).strip().rstrip(',')
+            return f"The property is located at {clean_address}. It's really well connected and easy to reach."
 
         elif "price" in query_lower or "rent" in query_lower or "cost" in query_lower:
             if starting_price > 0:
-                return f"{name} has rooms starting from {starting_price:,} per month. Would you like to know about the different room types?"
-            return f"{name} has very competitive pricing. Private rooms and shared rooms are both available. Would you like to visit and see the rooms?"
+                return f"The property has rooms starting from {starting_price:,} per month. Would you like to know about the different room types?"
+            return "We have very competitive pricing. Private rooms and shared rooms are both available. Would you like to visit and see the rooms?"
 
         elif "amenities" in query_lower or "facilities" in query_lower:
             if amenity_names:
                 amenities_list = ", ".join(amenity_names[:6])
-                return f"{name} comes with {amenities_list}. It's really well maintained."
-            return f"{name} comes fully furnished with Wifi, housekeeping, electricity, water, and A.C. Everything you need to feel right at home."
+                return f"The property comes with {amenities_list}. It's really well maintained."
+            return "The property comes fully furnished with Wifi, housekeeping, electricity, water, and A.C. Everything you need to feel right at home."
 
         else:
-            response = f"{name} is a lovely co living property in Bengaluru. Fully furnished rooms, great amenities, and a wonderful community."
+            response = "It's a lovely co living property in the Whitefield area, Bengaluru. Fully furnished rooms, great amenities, and a wonderful community."
             if starting_price > 0:
                 response += f" Rooms start from {starting_price:,} per month."
             return response
 
     except Exception as e:
         logger.error(f"[TOOL-ERROR] query_luna_property_info failed | Error: {str(e)}", exc_info=True)
-        return f"{PROPERTY_NAME} is a wonderful co living space in Bengaluru with fully furnished rooms, Wifi, housekeeping, and all modern amenities. Would you like to visit?"
+        return "It's a wonderful co living space in Bengaluru with fully furnished rooms, Wifi, housekeeping, and all modern amenities. Would you like to visit?"
 
 
 async def get_luna_room_types(user_id: str) -> str:
@@ -332,7 +340,7 @@ async def get_luna_room_types(user_id: str) -> str:
         room_types_data = get_room_types()
 
         if not room_types_data:
-            return f"At Truliv Luna, we have private rooms and shared rooms, both fully furnished with A.C., Wifi, and housekeeping. Would you like to come and see them? A visit really helps you decide."
+            return "We have private rooms and shared rooms, both fully furnished with A.C., Wifi, and housekeeping. Would you like to come and see them? A visit really helps you decide."
 
         formatted_rooms = []
         for room in room_types_data:
@@ -351,7 +359,7 @@ async def get_luna_room_types(user_id: str) -> str:
 
         if formatted_rooms:
             rooms_str = ". ".join(formatted_rooms[:4])
-            return f"At Truliv Luna, we have: {rooms_str}. Would you like to come and see them? A visit really helps you decide."
+            return f"We have: {rooms_str}. Would you like to come and see them? A visit really helps you decide."
         return "I couldn't find room configurations right now."
 
     except Exception as e:
@@ -367,7 +375,7 @@ async def get_luna_availability(user_id: str) -> str:
         bed_entry = get_bed_availability()
 
         if not bed_entry:
-            return "Truliv Luna currently has rooms available in both private and shared options. But beds fill up quickly, so I'd suggest visiting soon to secure your spot. Would you like to schedule a visit?"
+            return "We currently have rooms available in both private and shared options. But beds fill up quickly, so I'd suggest visiting soon to secure your spot. Would you like to schedule a visit?"
 
         available_rooms = []
         total_available = 0
@@ -397,11 +405,11 @@ async def get_luna_availability(user_id: str) -> str:
         if available_rooms:
             rooms_str = ", ".join(available_rooms[:3])
             return (
-                f"Great news! Truliv Luna currently has {rooms_str}. "
+                f"Great news! We currently have {rooms_str}. "
                 f"But beds do fill up quickly. Would you like to come visit and secure your spot?"
             )
         return (
-            "Truliv Luna is currently fully booked. "
+            "The property is currently fully booked. "
             "But new openings come up regularly. Would you like me to keep you updated?"
         )
 
@@ -505,7 +513,7 @@ async def check_location_proximity(user_id: str, location_query: str) -> str:
         # Get Truliv Luna's coordinates from cached property data
         prop = get_property()
         if not prop:
-            return "I couldn't check the location right now. But we have a lovely property called Truliv Luna in Bengaluru!"
+            return "I couldn't check the location right now. But we have a lovely property in the Whitefield area, Bengaluru!"
 
         prop_location = prop.get("location", {})
         prop_lat = prop_location.get("latitude")
@@ -519,7 +527,7 @@ async def check_location_proximity(user_id: str, location_query: str) -> str:
                 prop_lat = prop_coords["lat"]
                 prop_lng = prop_coords["lng"]
             else:
-                return "We have a lovely property called Truliv Luna in Bengaluru. Would you like to know more about it?"
+                return "We have a lovely property in the Whitefield area, Bengaluru. Would you like to know more about it?"
 
         prop_lat = float(prop_lat)
         prop_lng = float(prop_lng)
@@ -543,18 +551,18 @@ async def check_location_proximity(user_id: str, location_query: str) -> str:
 
         if distance_km <= MAX_DISTANCE_KM:
             return (
-                f"Oh that's great! {location_query} is really close to our property, Truliv Luna. "
+                f"Oh that's great! {location_query} is really close to our property. "
                 f"It's just about {distance_km:.0f} kilometers away. "
                 f"I think it would be perfect for you! Would you like to know more about it?"
             )
         else:
             return (
-                f"Hmm, so {location_query} is about {distance_km:.0f} kilometers from our property Truliv Luna. "
+                f"Hmm, so {location_query} is about {distance_km:.0f} kilometers from our property. "
                 f"We don't have a PG right in {location_query} unfortunately. "
-                f"But Truliv Luna is a really wonderful property and well connected by transport. "
+                f"But our place is really wonderful and well connected by transport. "
                 f"Would you be open to considering it? A lot of our residents commute from nearby areas and they love it here."
             )
 
     except Exception as e:
         logger.error(f"[TOOL-ERROR] check_location_proximity failed | Error: {str(e)}", exc_info=True)
-        return "I couldn't check the location right now. But we have a lovely property called Truliv Luna in Bengaluru. Would you like to know more?"
+        return "I couldn't check the location right now. But we have a lovely property in the Whitefield area, Bengaluru. Would you like to know more?"

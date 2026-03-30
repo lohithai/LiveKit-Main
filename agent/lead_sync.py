@@ -1,9 +1,7 @@
 import aiohttp
-import asyncio
-import json
 import os
 from typing import Any, Dict, List, Optional
-from logger import voice_logger
+from logger import logger
 
 # Load environment variables if present
 try:
@@ -43,7 +41,7 @@ async def create_or_update_lead(lead_data: List[Dict[str, Any]]) -> Optional[Dic
         Response containing lead ID and affected rows, or None on failure.
     """
     if not ACCESS_KEY or not SECRET_KEY:
-        voice_logger.error("LeadSquared API credentials not configured")
+        logger.error("LeadSquared API credentials not configured")
         return None
 
     url = f"{BASE_URL}/Lead.CreateOrUpdate"
@@ -57,7 +55,7 @@ async def create_or_update_lead(lead_data: List[Dict[str, Any]]) -> Optional[Dic
                 response.raise_for_status()
                 return await response.json()
     except Exception as exc:
-        voice_logger.error(f"LeadSquared create/update failed: {exc}")
+        logger.error(f"LeadSquared create/update failed: {exc}")
         return None
 
 
@@ -72,7 +70,7 @@ async def get_lead_by_id(lead_id: str) -> Optional[List[Dict[str, Any]]]:
         List of lead records, or None on failure.
     """
     if not ACCESS_KEY or not SECRET_KEY:
-        voice_logger.error("LeadSquared API credentials not configured")
+        logger.error("LeadSquared API credentials not configured")
         return None
 
     url = f"{BASE_URL}/Leads.GetById"
@@ -85,7 +83,7 @@ async def get_lead_by_id(lead_id: str) -> Optional[List[Dict[str, Any]]]:
                 response.raise_for_status()
                 return await response.json()
     except Exception as exc:
-        voice_logger.error(f"LeadSquared get by id failed: {exc}")
+        logger.error(f"LeadSquared get by id failed: {exc}")
         return None
 
 
@@ -162,27 +160,27 @@ async def sync_user_to_leadsquared(
 
         # Only make API call if we have data to sync (beyond just phone and searchby)
         if len(lead_data) <= 2:
-            voice_logger.warning(f"No fields to sync for user {formatted_phone}")
+            logger.warning(f"No fields to sync for user {formatted_phone}")
             return True  # Not an error, just nothing to sync
 
-        voice_logger.info(f"Syncing {len(lead_data) - 1} fields to LeadSquared for {formatted_phone}")
+        logger.info(f"Syncing {len(lead_data) - 1} fields to LeadSquared for {formatted_phone}")
 
         # Create/update lead in LeadSquared
         result = await create_or_update_lead(lead_data)
 
         if result and result.get("Status") == "Success":
-            voice_logger.info(f"Successfully synced user {formatted_phone} to LeadSquared")
+            logger.info(f"Successfully synced user {formatted_phone} to LeadSquared")
             return True
         elif result and result.get("ExceptionMessage"):
              # Log specific exception from LeadSquared if available
-             voice_logger.error(f"LeadSquared sync failed for {formatted_phone}: {result.get('ExceptionMessage')}")
+             logger.error(f"LeadSquared sync failed for {formatted_phone}: {result.get('ExceptionMessage')}")
              return False
         else:
-            voice_logger.error(f"LeadSquared sync failed for {formatted_phone}: {result}")
+            logger.error(f"LeadSquared sync failed for {formatted_phone}: {result}")
             return False
 
     except Exception as exc:
-        voice_logger.error(f"Error syncing user {formatted_phone} to LeadSquared: {exc}", exc_info=True)
+        logger.error(f"Error syncing user {formatted_phone} to LeadSquared: {exc}", exc_info=True)
         return False
 
 
@@ -215,97 +213,19 @@ async def sync_lla_signed_to_leadsquared(user_phone: str) -> bool:
             }
         ]
 
-        voice_logger.info(f"Syncing LLA Signed status to LeadSquared for {formatted_phone}")
+        logger.info(f"Syncing LLA Signed status to LeadSquared for {formatted_phone}")
 
         # Create/update lead in LeadSquared
         result = await create_or_update_lead(lead_data)
-        print(result)
 
         if result and result.get("Status") == "Success":
-            voice_logger.info(f"Successfully synced LLA Signed for {formatted_phone} to LeadSquared")
+            logger.info(f"Successfully synced LLA Signed for {formatted_phone} to LeadSquared")
             return True
         else:
-            voice_logger.error(f"LeadSquared LLA Signed sync failed for {formatted_phone}: {result}")
+            logger.error(f"LeadSquared LLA Signed sync failed for {formatted_phone}: {result}")
             return False
 
     except Exception as exc:
-        voice_logger.error(f"Error syncing LLA Signed for {formatted_phone} to LeadSquared: {exc}", exc_info=True)
+        logger.error(f"Error syncing LLA Signed for {formatted_phone} to LeadSquared: {exc}", exc_info=True)
         return False
 
-
-# Example 1: Create/Update Lead
-if __name__ == "__main__":
-    # Example lead data
-    lead_data = [
-        {
-            "Attribute": "FirstName",
-            "Value": "Test User"
-        },
-        {
-            "Attribute": "Phone",
-            "Value": "919530251797"
-        },
-        {
-            "Attribute": "EmailAddress",
-            "Value": "testuser@example.com"
-        },
-        {
-            "Attribute": "mx_Bot_Profession",
-            "Value": "Engineer"
-        },
-        {
-            "Attribute": "mx_Bot_Location_Preference",
-            "Value": "OMR"
-        },
-        {
-            "Attribute": "mx_Bot_Move_In_Preference",
-            "Value": "Immediate"
-        },
-        {
-            "Attribute": "mx_Bot_Room_Sharing_Preference",
-            "Value": "Private Room"
-        },
-        {
-            "Attribute": "mx_Bot_Budget",
-            "Value": "15000"
-        }
-    ]
-
-    async def main() -> None:
-        # Create or update the lead
-        # print("Creating/Updating Lead...")
-        # result = await create_or_update_lead(lead_data)
-        # print(json.dumps(result, indent=2))
-
-        # if not result or result.get("Status") != "Success":
-        #     print("Lead creation/update failed; aborting lookup.")
-        #     return
-
-        lead_id = "66e11c68-0716-42be-a2e9-766ba8107d9b"
-        print(f"\nLead ID: {lead_id}")
-
-        # Fetch the lead details
-        print(f"\nFetching Lead Details...")
-        lead_details = await get_lead_by_id(lead_id)
-        print(lead_details)
-
-        if not lead_details:
-            print("No lead details returned.")
-            return
-
-        lead = lead_details[0]
-        print(f"\nLead Information:")
-        print(f"  Name: {lead.get('FirstName')} {lead.get('LastName', '')}")
-        print(f"  Email: {lead.get('EmailAddress')}")
-        print(f"  Phone: {lead.get('Phone')}")
-        print(f"  Profession: {lead.get('mx_Bot_Profession')}")
-        print(f"  Location Preference: {lead.get('mx_Bot_Location_Preference')}")
-        print(f"  Gallabox Trigger: {lead.get('mx_Asset_LLA_Signed')}")
-        print(f"  Budget: {lead.get('mx_Bot_Budget')}")
-        print(f"  Created On: {lead.get('CreatedOn')}")
-        print(f"  Modified On: {lead.get('ModifiedOn')}")
-        # Example: Sync user to LeadSquared
-        # user_phone = "919530251797"
-        # print(await sync_lla_signed_to_leadsquared(user_phone))
-
-    asyncio.run(main())

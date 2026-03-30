@@ -1,53 +1,45 @@
-import json
+"""
+Truliv Luna Bengaluru — Voice AI Assistant
+Single property agent with Sarvam TTS + STT
+"""
+
 import asyncio
 from datetime import date, datetime
-from typing import Optional, Annotated
 
-from livekit import agents, api, rtc
+from livekit import api
 from livekit.agents import Agent, RunContext, function_tool, get_job_context
 
 from instruction import generate_agent_system_prompt
 from agent_tools import (
-    load_properties_once,
     update_user_profile,
-    find_nearest_property,
-    explore_more_properties,
     schedule_site_visit,
-    query_property_information,
+    query_luna_property_info,
+    get_luna_room_types,
+    get_luna_availability,
     zero_deposit,
-    get_room_types_for_property,
-    get_room_availability,
-    get_all_room_availability,
-    properties_according_to_budget,
-    set_cached_context,
-    flush_cached_context,
-    clear_cached_context,
+    check_location_proximity,
+    update_cached_context,
 )
-from lead_sync import sync_user_to_leadsquared
-from database import get_async_context_collection
 from logger import logger
 
 import calendar
 
 
 class TrulivAssistant(Agent):
-    """Truliv Voice AI Agent for LiveKit - handles PG property inquiries and visit scheduling."""
+    """Truliv Luna Bengaluru Voice AI Agent — single property, Sarvam TTS+STT."""
 
-    # Cartesia uses ISO 639-1 language codes for multilingual voice
+    # Sarvam BCP-47 codes — same speaker (ritu) for all languages
     LANGUAGE_MAP = {
-        "en": {"lang_code": "en", "stt_code": "en-IN", "name": "English"},
-        "hi": {"lang_code": "hi", "stt_code": "hi-IN", "name": "Hindi"},
-        "ta": {"lang_code": "ta", "stt_code": "ta-IN", "name": "Tamil"},
-        "te": {"lang_code": "te", "stt_code": "te-IN", "name": "Telugu"},
-        "kn": {"lang_code": "kn", "stt_code": "kn-IN", "name": "Kannada"},
-        "bn": {"lang_code": "bn", "stt_code": "bn-IN", "name": "Bengali"},
-        "gu": {"lang_code": "gu", "stt_code": "gu-IN", "name": "Gujarati"},
-        "ml": {"lang_code": "ml", "stt_code": "ml-IN", "name": "Malayalam"},
-        "mr": {"lang_code": "mr", "stt_code": "mr-IN", "name": "Marathi"},
+        "en": {"tts_code": "en-IN", "stt_code": "en-IN", "name": "English"},
+        "hi": {"tts_code": "hi-IN", "stt_code": "hi-IN", "name": "Hindi"},
+        "ta": {"tts_code": "ta-IN", "stt_code": "ta-IN", "name": "Tamil"},
+        "te": {"tts_code": "te-IN", "stt_code": "te-IN", "name": "Telugu"},
+        "kn": {"tts_code": "kn-IN", "stt_code": "kn-IN", "name": "Kannada"},
+        "bn": {"tts_code": "bn-IN", "stt_code": "bn-IN", "name": "Bengali"},
+        "gu": {"tts_code": "gu-IN", "stt_code": "gu-IN", "name": "Gujarati"},
+        "ml": {"tts_code": "ml-IN", "stt_code": "ml-IN", "name": "Malayalam"},
+        "mr": {"tts_code": "mr-IN", "stt_code": "mr-IN", "name": "Marathi"},
     }
-
-    # Languages supported by sonic-turbo (fast). Others need sonic-3 (full language support).
-    SONIC_TURBO_LANGUAGES = {"en", "hi", "fr", "de", "es", "pt", "zh", "ja", "it", "ko", "nl", "pl", "ru", "sv", "tr"}
 
     def __init__(
         self,
@@ -133,36 +125,77 @@ class TrulivAssistant(Agent):
             call_history_text=call_history_text,
         )
 
-    # -- Language Switching (updated for Cartesia TTS) ---------------------
+    # -- STT prompts per language (helps Sarvam accuracy) -----------
+    STT_PROMPTS = {
+        "en-IN": "Truliv Luna Bengaluru PG coliving property. Koramangala, HSR Layout, Electronic City, Whitefield, Indiranagar, Marathahalli, Bellandur, Sarjapur",
+        "hi-IN": "Truliv Luna Bengaluru PG coliving. कोरमंगला, HSR लेआउट, इलेक्ट्रॉनिक सिटी, व्हाइटफील्ड",
+        "kn-IN": "Truliv Luna ಬೆಂಗಳೂರು PG coliving. ಕೋರಮಂಗಲ, HSR ಲೇಔಟ್, ಎಲೆಕ್ಟ್ರಾನಿಕ್ ಸಿಟಿ, ವೈಟ್‌ಫೀಲ್ಡ್",
+        "ta-IN": "Truliv Luna பெங்களூர் PG coliving. கோரமங்கலா, HSR லேஅவுட், எலக்ட்ரானிக் சிட்டி",
+        "te-IN": "Truliv Luna బెంగళూరు PG coliving. కోరమంగల, HSR లేఔట్, ఎలక్ట్రానిక్ సిటీ",
+        "ml-IN": "Truliv Luna ബെംഗളൂരു PG coliving",
+        "mr-IN": "Truliv Luna बेंगळूरू PG coliving",
+        "bn-IN": "Truliv Luna বেঙ্গালুরু PG coliving",
+        "gu-IN": "Truliv Luna બેંગલુરુ PG coliving",
+    }
+
+    # -- Language Switching (Sarvam TTS + STT) ---------------------
 
     async def _switch_language(self, language_code: str) -> str:
-        """Switch both TTS and STT to the target language."""
+        """Full language switch: STT + TTS (base opts + live streams) + instructions."""
         if language_code not in self.LANGUAGE_MAP:
-            logger.warning(f"_switch_language called with unknown code: {language_code}")
             return f"Unsupported language: {language_code}"
 
         if language_code == self.current_language:
             return f"Already speaking {self.LANGUAGE_MAP[language_code]['name']}"
 
         lang_info = self.LANGUAGE_MAP[language_code]
-        lang_code = lang_info["lang_code"]
+        tts_code = lang_info["tts_code"]
         stt_code = lang_info["stt_code"]
         lang_name = lang_info["name"]
 
-        # Switch Cartesia TTS language (sonic-3 supports all Indian languages natively)
-        if self.session and self.session.tts is not None:
-            self.session.tts.update_options(language=lang_code)
-
-        # Switch Sarvam STT language for faster processing
+        # STEP 1: Update Sarvam STT — base opts + live streams
         if self.session and self.session.stt is not None:
             try:
+                stt_prompt = self.STT_PROMPTS.get(stt_code, "")
+                # Update base options for new streams
                 self.session.stt.update_options(language=stt_code)
+                # Update live streams if accessible
+                if hasattr(self.session.stt, '_streams'):
+                    for stream in self.session.stt._streams:
+                        try:
+                            stream.update_options(
+                                language=stt_code,
+                                mode="transcribe",
+                                prompt=stt_prompt,
+                            )
+                        except Exception:
+                            pass
+                logger.info(f"[LANG] STT switched to {stt_code}")
             except Exception as e:
                 logger.warning(f"STT language switch failed: {e}")
 
+        # STEP 2: Update Sarvam TTS — language only, keep same speaker
+        if self.session and self.session.tts is not None:
+            try:
+                self.session.tts.update_options(language=tts_code)
+                # Update live streams if accessible
+                if hasattr(self.session.tts, '_streams'):
+                    for stream in self.session.tts._streams:
+                        try:
+                            stream._opts.target_language_code = tts_code
+                        except Exception:
+                            pass
+                logger.info(f"[LANG] TTS switched to {tts_code}")
+            except Exception as e:
+                logger.warning(f"TTS language switch failed: {e}")
+
+        # STEP 3: Update agent state
         self.current_language = language_code
-        logger.info(f"Language switched to {lang_name} (TTS: {lang_code}, STT: {stt_code})")
-        return f"Switched to {lang_name}"
+
+        logger.info(f"[LANG] Full switch to {lang_name} (TTS: {tts_code}, STT: {stt_code})")
+
+        # STEP 4: Return handoff message
+        return f"Language switched to {lang_name}. Continue the conversation in {lang_name} from now on."
 
     @function_tool()
     async def switch_language(
@@ -170,13 +203,24 @@ class TrulivAssistant(Agent):
         ctx: RunContext,
         language: str,
     ) -> str:
-        """Switch the conversation language ONLY when the caller speaks 3 or more full consecutive sentences entirely in another language. Do NOT switch for mixed code-switching words like haan, accha, theek hai, ji, yaar inside English sentences. Never switch on the greeting turn.
+        """Switch the conversation language when the caller consistently speaks in another language.
+
+        WHEN TO CALL:
+        - Caller has spoken full sentences in another language for 2 CONSECUTIVE turns.
+        - Caller explicitly asks: "Hindi mein baat karo", "Tamil la pesu", etc.
+
+        NEVER call this for:
+        - Filler words (haan, accha, theek hai, seri, anna, ji, yaar, etc.)
+        - Code-mixing (English sentences with a few regional words mixed in)
+        - Just 1 turn in another language (could be STT error)
+        - On the greeting turn
 
         Args:
             language: Language code — one of: en (English), hi (Hindi), ta (Tamil), te (Telugu), kn (Kannada), bn (Bengali), gu (Gujarati), ml (Malayalam), mr (Marathi)
         """
         if language not in self.LANGUAGE_MAP:
             return f"Unsupported language: {language}. Supported: {', '.join(self.LANGUAGE_MAP.keys())}"
+        logger.info(f"[LANG SWITCH] Caller requested: {language}")
         return await self._switch_language(language)
 
     # -- Tool Methods ---------------------------------------------------------
@@ -192,7 +236,7 @@ class TrulivAssistant(Agent):
         name: str = "",
         phone_number: str = "",
     ) -> str:
-        """Update user profile with preferences. Call when user mentions their profession, move-in timeline, room preference, property interest, name, or phone number.
+        """Update user profile with preferences. Call when user mentions their profession, move-in timeline, room preference, name, or phone number.
 
         Args:
             profession: User's profession (working/student)
@@ -213,71 +257,52 @@ class TrulivAssistant(Agent):
         )
 
     @function_tool()
-    async def voice_find_nearest_property(
+    async def voice_check_location(
         self,
         ctx: RunContext,
         location_query: str,
     ) -> str:
-        """Find properties near a location or area in Chennai. Use when user mentions an area name like OMR, Kodambakkam, T.Nagar, Velachery, etc. Pass AREA name only, never property name.
+        """Check if a Bengaluru area is near Truliv Luna. Call when user mentions a specific area or location in Bengaluru like Koramangala, Electronic City, Whitefield, HSR Layout, etc.
 
         Args:
-            location_query: Area or location name like 'OMR', 'Kodambakkam', 'T.Nagar'
+            location_query: Area name in Bengaluru like 'Koramangala', 'Electronic City', 'Whitefield'
         """
-        return await find_nearest_property(
+        return await check_location_proximity(
             self.voice_user_id,
             location_query,
         )
 
     @function_tool()
-    async def voice_properties_according_to_budget(
-        self,
-        ctx: RunContext,
-        budget_query: str,
-    ) -> str:
-        """Find properties within user's budget. Use when user mentions a specific budget amount.
-
-        Args:
-            budget_query: User's budget query like 'under 10k', 'between 10k and 15k', '8000'
-        """
-        return await properties_according_to_budget(
-            self.voice_user_id,
-            budget_query,
-        )
-
-    @function_tool()
-    async def voice_query_property_information(
+    async def voice_query_property_info(
         self,
         ctx: RunContext,
         query: str,
-        property_name: str,
     ) -> str:
-        """Get details about a specific property - price, address, amenities, room types, etc. Use when user asks about a specific property by name.
+        """Get details about Truliv Luna — pricing, address, amenities, etc. Use when user asks about the property.
 
         Args:
             query: Question like 'pricing', 'address', 'amenities', 'details'
-            property_name: Exact property name like 'Truliv Amara', 'Truliv Vesta'
         """
-        return await query_property_information(
+        return await query_luna_property_info(
             self.voice_user_id,
             query,
-            property_name,
         )
 
     @function_tool()
-    async def voice_explore_more_properties(
+    async def voice_get_room_types(
         self,
         ctx: RunContext,
-        exclude_properties: str = "",
     ) -> str:
-        """Show more properties in the current area, excluding ones already shown. Use when user asks for more options or different properties.
+        """Get available room types at Truliv Luna. Use when user asks about room types, single vs double, or male vs female options."""
+        return await get_luna_room_types(self.voice_user_id)
 
-        Args:
-            exclude_properties: Comma-separated property names to exclude from results
-        """
-        return await explore_more_properties(
-            self.voice_user_id,
-            exclude_properties,
-        )
+    @function_tool()
+    async def voice_get_availability(
+        self,
+        ctx: RunContext,
+    ) -> str:
+        """Check real-time bed availability at Truliv Luna. Use when user asks about availability or when they can move in."""
+        return await get_luna_availability(self.voice_user_id)
 
     @function_tool()
     async def voice_schedule_site_visit(
@@ -287,7 +312,7 @@ class TrulivAssistant(Agent):
         visit_time: str,
         name: str,
     ) -> str:
-        """Schedule a site visit. ONLY call this after the caller has EXPLICITLY told you both a specific date AND a specific time. NEVER guess or assume a time. If the caller said 'tomorrow' but no time, ask for the time first. If they said 'morning' but no exact hour, ask what time in the morning. You must also have their name. Update property preference BEFORE calling this if they mentioned a specific property.
+        """Schedule a site visit at Truliv Luna. ONLY call this after the caller has EXPLICITLY told you both a specific date AND a specific time. NEVER guess. You must also have their name.
 
         Args:
             visit_date: Date in YYYY-MM-DD format (convert from natural language like 'tomorrow', 'Monday')
@@ -299,51 +324,6 @@ class TrulivAssistant(Agent):
             visit_date,
             visit_time,
             name,
-        )
-
-    @function_tool()
-    async def voice_get_room_types(
-        self,
-        ctx: RunContext,
-        property_name: str = "",
-    ) -> str:
-        """Get available room types and their amenities for a property. Use when user asks about room types, single vs double, or male vs female options.
-
-        Args:
-            property_name: Property name to check room types for
-        """
-        return await get_room_types_for_property(
-            self.voice_user_id,
-            property_name or None,
-        )
-
-    @function_tool()
-    async def voice_get_availability(
-        self,
-        ctx: RunContext,
-        property_name: str = "",
-        move_in_date: str = "",
-    ) -> str:
-        """Check real-time bed availability for a specific property. Use when user asks about availability or when they can move in.
-
-        Args:
-            property_name: Property name to check availability for
-            move_in_date: Move-in date in YYYY-MM-DD format if specified
-        """
-        return await get_room_availability(
-            self.voice_user_id,
-            property_name or None,
-            move_in_date or None,
-        )
-
-    @function_tool()
-    async def voice_get_all_room_availability(
-        self,
-        ctx: RunContext,
-    ) -> str:
-        """Get room availability across ALL Truliv properties. Use when user asks which properties have rooms available without specifying a particular property."""
-        return await get_all_room_availability(
-            self.voice_user_id,
         )
 
     @function_tool()
@@ -364,7 +344,7 @@ class TrulivAssistant(Agent):
         self,
         ctx: RunContext,
     ) -> str:
-        """Hang up the phone call. You MUST call this tool whenever you say goodbye or the conversation is ending. If you don't call this, the caller will hear silence forever.
+        """Hang up the phone call. You MUST call this tool whenever you say goodbye or the conversation is ending.
 
         WHEN TO CALL:
         - After saying any goodbye/closing message
@@ -376,9 +356,8 @@ class TrulivAssistant(Agent):
         job_ctx = get_job_context()
 
         async def _delayed_shutdown():
-            await asyncio.sleep(15)  # Wait for TTS to finish speaking goodbye at speed=0.9
+            await asyncio.sleep(15)
 
-            # Remove SIP participant to send SIP BYE and hang up the phone
             try:
                 for participant in job_ctx.room.remote_participants.values():
                     logger.info(f"[END_CALL] Removing SIP participant: {participant.identity}")

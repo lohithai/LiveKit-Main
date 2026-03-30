@@ -1,24 +1,21 @@
 [project]
 name = "truliv-agent"
-version = "0.3.0"
-description = "Truliv Luna Bengaluru Voice AI Agent - Sarvam STT+TTS + OpenRouter LLM"
+version = "0.4.0"
+description = "Truliv Luna Bengaluru Voice AI Agent — Sarvam STT+TTS + Gemini Flash LLM"
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    # LiveKit core + plugins (Sarvam STT+TTS, OpenAI for OpenRouter, Silero VAD)
-    "livekit-agents[silero,turn-detector,google,openai]>=1.5",
+    # LiveKit core + plugins
+    "livekit-agents[silero,turn-detector,google]>=1.5",
     "livekit-plugins-sarvam==1.4.4",
     "livekit-api>=1.0",
     "livekit-plugins-noise-cancellation~=0.2",
     # Config
     "python-dotenv",
-    # HTTP clients
-    "httpx",
+    # HTTP client
     "aiohttp",
-    "requests",
     # MongoDB
     "motor",
-    "tenacity",
-    # Google Generative AI (direct async — no LangChain overhead)
+    # Google Generative AI (for QC analysis)
     "google-genai",
     # Logging
     "loguru",
