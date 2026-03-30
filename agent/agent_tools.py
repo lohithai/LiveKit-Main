@@ -325,6 +325,7 @@ async def query_luna_property_info(user_id: str, query: str) -> str:
             response = "It's a lovely co living property in the Whitefield area, Bengaluru. Fully furnished rooms, great amenities, and a wonderful community."
             if starting_price > 0:
                 response += f" Rooms start from {starting_price:,} per month."
+            response += " You should definitely come visit and see it for yourself!"
             return response
 
     except Exception as e:

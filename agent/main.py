@@ -11,7 +11,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from livekit import agents, rtc
-from livekit.agents import AgentServer, AgentSession, AutoSubscribe
+from livekit.agents import AgentServer, AgentSession, AutoSubscribe, TurnHandlingOptions
 from livekit.plugins import google, sarvam, silero
 
 from agent_tools import (
@@ -413,7 +413,7 @@ async def truliv_agent(ctx: agents.JobContext):
         target_language_code="en-IN",
         model="bulbul:v3",
         loudness=1.5,
-        pace=1.05,
+        pace=1.1,
         speech_sample_rate=22050,
         enable_preprocessing=False,
         min_buffer_size=30,
@@ -421,22 +421,33 @@ async def truliv_agent(ctx: agents.JobContext):
     )
 
     vad = silero.VAD.load(
-        min_speech_duration=0.12,
-        min_silence_duration=0.25,
-        prefix_padding_duration=0.15,
-        activation_threshold=0.4,
+        min_speech_duration=0.1,
+        min_silence_duration=0.2,
+        prefix_padding_duration=0.1,
+        activation_threshold=0.35,
         sample_rate=16000,
     )
 
-    llm = google.LLM(model="gemini-2.5-flash", temperature=0.6)
+    llm = google.LLM(model="gemini-2.5-flash", temperature=0.7)
+
+    turn_handling = TurnHandlingOptions(
+        endpointing={
+            "mode": "dynamic",
+            "min_delay": 0.05,
+            "max_delay": 0.2,
+        },
+        interruption={
+            "enabled": True,
+            "mode": "adaptive",
+            "min_duration": 0.4,
+            "min_words": 2,
+        },
+    )
 
     session = AgentSession(
         stt=stt, llm=llm, tts=tts, vad=vad,
-        min_endpointing_delay=0.08,
-        max_endpointing_delay=0.25,
+        turn_handling=turn_handling,
         preemptive_generation=True,
-        min_interruption_duration=0.5,
-        min_interruption_words=2,
     )
 
     call_started_at = datetime.now()
